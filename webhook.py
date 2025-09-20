@@ -1,7 +1,9 @@
 import os
 import requests
 import json
+import asyncio  # <<< THÊM: Cần thiết để chạy hàm async
 from flask import Blueprint, request, jsonify
+from api.analyze import perform_full_analysis  # <<< THÊM: Import bộ não AI
 
 # Tạo Blueprint cho Messenger webhook
 webhook_blueprint = Blueprint('webhook_blueprint', __name__)
@@ -13,7 +15,7 @@ VERIFY_TOKEN = os.environ.get('VERIFY_TOKEN')
 print(f"VERIFY_TOKEN loaded: {VERIFY_TOKEN}")
 print(f"PAGE_ACCESS_TOKEN loaded: {PAGE_ACCESS_TOKEN}")
 
-# Endpoint để xác thực Webhook
+# Endpoint để xác thực Webhook (GIỮ NGUYÊN, KHÔNG THAY ĐỔI)
 @webhook_blueprint.route('/messenger_webhook', methods=['GET'])
 def verify_webhook():
     print("Received GET request for webhook verification.")
@@ -36,43 +38,54 @@ def verify_webhook():
     print('VERIFICATION FAILED: Missing parameters.')
     return 'Invalid request', 400
 
-# Endpoint để xử lý tin nhắn đến
+# Endpoint để xử lý tin nhắn đến (ĐÃ NÂNG CẤP)
 @webhook_blueprint.route('/messenger_webhook', methods=['POST'])
 def handle_message():
     print("Received POST request from webhook.")
     
     try:
         data = request.get_json(force=True)
-        print('Raw data received:')
-        print(json.dumps(data, indent=2))
         
         if data.get('object') == 'page':
             for entry in data.get('entry', []):
-                print("Processing entry...")
                 for messaging_event in entry.get('messaging', []):
-                    print("Processing messaging event.")
                     
                     if messaging_event.get('message'):
                         sender_id = messaging_event['sender']['id']
                         message = messaging_event['message']
                         message_text = message.get('text')
                         
-                        print(f"Message event detected from sender_id: {sender_id}")
-                        print(f"Message content: {message}")
-
                         if message_text:
                             print(f'Received message text: "{message_text}" from PSID: {sender_id}')
                             
-                            # Gửi phản hồi đơn giản (cho mục đích demo)
-                            send_simple_reply(sender_id, f"Bạn đã gửi: '{message_text}'")
-                            print("Sent simple reply.")
+                            # <<< BẮT ĐẦU TÍCH HỢP AI >>>
+                            print("➡️  Bắt đầu phân tích tin nhắn với CyberShield AI...")
+                            
+                            # Chạy hàm async `perform_full_analysis` từ context đồng bộ của Flask
+                            analysis_result = asyncio.run(perform_full_analysis(message_text, []))
+                            print(f"✅ Kết quả phân tích: {json.dumps(analysis_result, ensure_ascii=False)}")
+
+                            # Chỉ phản hồi nếu kết quả phân tích là nguy hiểm
+                            if analysis_result and analysis_result.get('is_dangerous'):
+                                reason = analysis_result.get('reason', 'Lý do không xác định.')
+                                recommend = analysis_result.get('recommend', 'Hãy cẩn thận với tin nhắn này.')
+                                score = analysis_result.get('score', 'N/A')
+                                
+                                # Tạo nội dung tin nhắn cảnh báo
+                                reply_message = (
+                                    f"⚠️ CẢNH BÁO TỪ CYBERSHIELD ⚠️\n\n"
+                                    f"Tin nhắn bạn vừa nhận có dấu hiệu nguy hiểm (Điểm: {score}/5).\n\n"
+                                    f"🔎 Phân tích: {reason}\n\n"
+                                    f"💡 Gợi ý: {recommend}"
+                                )
+                                send_message(sender_id, reply_message)
+                            else:
+                                # Nếu tin nhắn an toàn, bot sẽ im lặng để không làm phiền
+                                print(" Tin nhắn được xác định là AN TOÀN. Bỏ qua phản hồi.")
+                            # <<< KẾT THÚC TÍCH HỢP AI >>>
+                        
                         else:
                             print("Received a message without text content (e.g., sticker, attachment).")
-                    elif messaging_event.get('postback'):
-                        sender_id = messaging_event['sender']['id']
-                        postback = messaging_event['postback']
-                        print(f"Postback event detected from sender_id: {sender_id}")
-                        print(f"Postback content: {postback}")
                     
     except Exception as e:
         print(f"An error occurred during webhook processing: {e}")
@@ -80,9 +93,10 @@ def handle_message():
 
     return 'OK', 200
 
-def send_simple_reply(recipient_id, message_text):
+def send_message(recipient_id, message_text):
     """
     Gửi tin nhắn phản hồi đến người dùng.
+    (Đổi tên từ send_simple_reply để tổng quát hơn)
     """
     API_URL = 'https://graph.facebook.com/v23.0/me/messages'
     
@@ -95,7 +109,7 @@ def send_simple_reply(recipient_id, message_text):
         'Content-Type': 'application/json'
     }
 
-    print(f"Preparing to send reply to {recipient_id} with message: '{message_text}'")
+    print(f"Preparing to send message to {recipient_id}")
 
     try:
         r = requests.post(API_URL, params={'access_token': PAGE_ACCESS_TOKEN}, json=payload, headers=headers)
